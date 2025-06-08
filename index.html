@@ -1,0 +1,176 @@
+
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>MFA System</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; background-color: #f7f7f7; color: #333; }
+            .container { background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin-bottom: 20px; }
+            h1, h3 { text-align: center; color: #222; }
+            input, button { width: 100%; box-sizing: border-box; padding: 12px; margin-bottom: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+            button { background: #007aff; color: white; cursor: pointer; border: none; font-weight: 600; transition: background-color 0.2s; }
+            button:hover { background: #0056b3; }
+            button:disabled { background: #cce4ff; cursor: not-allowed; }
+            .result { padding: 15px; margin-top: 20px; border-radius: 8px; border-left: 5px solid; font-weight: 500; }
+            .success { background: #e9f7ef; color: #1d643b; border-color: #48c774; }
+            .error { background: #feecf0; color: #cc0f35; border-color: #f14668; }
+            .review { background: #fffbeb; color: #947600; border-color: #ffdd57; }
+        </style>
+    </head>
+    <body>
+        <h1>Multi-Factor Authentication</h1>
+
+        <div class="container" id="register-container">
+            <h3>New User Registration</h3>
+            <input type="text" id="reg-aadhaar" placeholder="Enter 12-digit Aadhaar" maxlength="12">
+            <input type="tel" id="reg-phone" placeholder="Enter Phone Number (e.g., +919876543210)" maxlength="15">
+            <input type="email" id="reg-email" placeholder="Enter Email Address">
+            <button id="reg-btn" onclick="registerUser()">Register</button>
+            <p style="text-align:center; margin-top:15px;"><a href="#" onclick="showAuthSection()">Already registered? Authenticate here.</a></p>
+        </div>
+
+        <div class="container" id="init-container" style="display:none;">
+            <h3>Step 1: Initiate Authentication</h3>
+            <input type="text" id="auth-aadhaar" placeholder="Enter 12-digit Aadhaar" maxlength="12">
+            <button id="init-btn" onclick="initiateAuth()">Send OTP</button>
+            <p style="text-align:center; margin-top:15px;"><a href="#" onclick="showRegisterSection()">New user? Register here.</a></p>
+        </div>
+        <div class="container" id="verify-container" style="display:none;">
+            <h3>Step 2: Verify Authentication</h3>
+            <p style="text-align:center; color: #666; font-size: 14px;">OTP is in the console. Please type in the box below to provide behavioral data.</p>
+            <input type="text" id="otp" placeholder="Enter 6-digit OTP" maxlength="6">
+            <textarea id="behavior-text" placeholder="Type here..." style="height: 60px;"></textarea>
+            <button id="verify-btn" onclick="verifyAuth()">Verify</button>
+        </div>
+        <div id="results"></div>
+        <script>
+            let sessionToken = '';
+            let behavioralData = { keystroke_dynamics: { keystrokes: [] }, mouse_dynamics: { mouse_events: [] } };
+            const initBtn = document.getElementById('init-btn');
+            const verifyBtn = document.getElementById('verify-btn');
+            const regBtn = document.getElementById('reg-btn');
+
+
+            function attachListeners() {
+                const area = document.getElementById('behavior-text');
+                area.onkeydown = area.onkeyup = (e) => {
+                    const ts = Date.now();
+                    const lastKeystroke = behavioralData.keystroke_dynamics.keystrokes.length > 0 ? behavioralData.keystroke_dynamics.keystrokes.slice(-1)[0] : null;
+                    
+                    let dwellTime = 0;
+                    let flightTime = 0;
+
+                    if (e.type === 'keyup' && lastKeystroke && lastKeystroke.key === e.key && lastKeystroke.type === 'keydown') {
+                        dwellTime = ts - lastKeystroke.timestamp;
+                    }
+                    if (lastKeystroke) {
+                        flightTime = ts - lastKeystroke.timestamp;
+                    }
+
+                    behavioralData.keystroke_dynamics.keystrokes.push({
+                        key: e.key, 
+                        type: e.type, 
+                        timestamp: ts,
+                        dwell_time: dwellTime,
+                        flight_time: flightTime
+                    });
+                };
+                document.onmousemove = (e) => {
+                    behavioralData.mouse_dynamics.mouse_events.push({ type: 'move', x: e.clientX, y: e.clientY, timestamp: Date.now() });
+                };
+            }
+
+            function showAuthSection() {
+                document.getElementById('register-container').style.display = 'none';
+                document.getElementById('init-container').style.display = 'block';
+                document.getElementById('verify-container').style.display = 'none';
+                document.getElementById('results').innerHTML = ''; // Clear results on section switch
+            }
+
+            function showRegisterSection() {
+                document.getElementById('register-container').style.display = 'block';
+                document.getElementById('init-container').style.display = 'none';
+                document.getElementById('verify-container').style.display = 'none';
+                document.getElementById('results').innerHTML = ''; // Clear results on section switch
+            }
+
+
+            async function apiCall(endpoint, body, button) {
+                button.disabled = true;
+                button.innerText = 'Processing...';
+                try {
+                    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || 'An unknown error occurred.');
+                    return result;
+                } catch (error) {
+                    showResult(error.message, 'error');
+                    throw error;
+                } finally {
+                    button.disabled = false;
+                }
+            }
+
+            async function registerUser() {
+                const aadhaar = document.getElementById('reg-aadhaar').value;
+                const phone = document.getElementById('reg-phone').value;
+                const email = document.getElementById('reg-email').value;
+
+                if (!/^\d{12}$/.test(aadhaar)) { return showResult('Please enter a valid 12-digit Aadhaar for registration.', 'error'); }
+                if (!/^\+?\d{10,15}$/.test(phone)) { return showResult('Please enter a valid phone number for registration.', 'error'); }
+                if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) { return showResult('Please enter a valid email address for registration.', 'error'); }
+
+                try {
+                    const result = await apiCall('/api/register', { aadhaar, phone_number: phone, email }, regBtn);
+                    showResult('Registration successful! You can now authenticate.', 'success');
+                    // Optionally pre-fill Aadhaar for authentication or switch to auth section
+                    document.getElementById('auth-aadhaar').value = aadhaar;
+                    showAuthSection();
+                } catch(e) { /* error handled in apiCall */ }
+                regBtn.innerText = 'Register';
+            }
+
+
+            async function initiateAuth() {
+                const aadhaar = document.getElementById('auth-aadhaar').value;
+                if (!/^\d{12}$/.test(aadhaar)) { return showResult('Please enter a valid 12-digit Aadhaar.', 'error'); }
+                
+                try {
+                    const result = await apiCall('/api/authenticate/initiate', { aadhaar }, initBtn);
+                    sessionToken = result.session_token;
+                    document.getElementById('verify-container').style.display = 'block';
+                    document.getElementById('init-container').style.display = 'none';
+                    showResult('OTP "sent" (check console). Please type in the box and verify.', 'success');
+                    attachListeners();
+                } catch(e) { /* error handled in apiCall */ }
+                initBtn.innerText = 'Send OTP';
+            }
+
+            async function verifyAuth() {
+                const otp = document.getElementById('otp').value;
+                if (!/^\d{6}$/.test(otp)) { return showResult('Please enter a valid 6-digit OTP.', 'error'); }
+                
+                try {
+                    const result = await apiCall('/api/authenticate/verify', { session_token: sessionToken, otp, behavioral_data: behavioralData }, verifyBtn);
+                    const resultClass = result.result.toLowerCase();
+                    showResult(`<h3>${result.result}</h3><p>Behavioral Score: <b>${(result.behavioral_score * 100).toFixed(1)}%</b><br>Overall Risk: <b>${(result.risk_score * 100).toFixed(1)}%</b></p>`, resultClass);
+                    // Reset behavioral data for next authentication attempt
+                    behavioralData = { keystroke_dynamics: { keystrokes: [] }, mouse_dynamics: { mouse_events: [] } };
+                    document.getElementById('behavior-text').value = '';
+                    document.getElementById('otp').value = '';
+
+                    document.getElementById('verify-container').style.display = 'none';
+                    document.getElementById('init-container').style.display = 'block';
+                } catch(e) { /* error handled in apiCall */ }
+                verifyBtn.innerText = 'Verify';
+            }
+
+            function showResult(message, type) {
+                document.getElementById('results').innerHTML = `<div class="result ${type}">${message}</div>`;
+            }
+        </script>
+    </body>
+    </html>
+    
